@@ -1,0 +1,20 @@
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.env
+.venv/
+venv/
+env/
+# raw GDSC data (not committed — see methodology/01_data_ingestion.md)
+data/raw/
+data/processed/
+*.h5
+*.pkl

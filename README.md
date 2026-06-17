@@ -1,135 +1,226 @@
-# capstone-project-2025
-Predicting drug sensitivity in LUAD using machine learning and multi-omic data.
-
 # Predicting Drug Sensitivity in Lung Adenocarcinoma Using Machine Learning
 
-### Jordan Dautelle, Hang Tran, David Yoon, Alli Warren
+> XGBoost regression and classification on multi-omic GDSC data (gene expression +
+> somatic driver mutations) to predict drug sensitivity in **Lung Adenocarcinoma**
+> (LUAD) cell lines — ROC AUC **0.97**, R² **0.80**.
 
-## Overview
+**Capstone — M.S. Biological Data Science · Arizona State University**
+*LSC 585 Capstone II in Biological Data Science · Dr. Ken Sweat · May 2, 2025*
+**Authors:** Jordan Dautelle · Hang Tran · David Yoon · Alli Warren
 
-This project explores the use of machine learning models to predict the sensitivity of Lung Adenocarcinoma (LUAD) cancer cell lines to various anti-cancer drugs. Lung cancer is the most lethal cancer globally, and patients often respond differently to treatments. By leveraging multi-omic data—specifically gene expression and somatic mutation profiles from the Genomics of Drug Sensitivity in Cancer (GDSC) project—we developed predictive models to identify intricate relationships between molecular features and drug sensitivity. The goal is to contribute to precision oncology by guiding more personalized treatment strategies.
+📄 **Full capstone paper:** [`docs/Capstone_Paper.pdf`](docs/Capstone_Paper.pdf) (28 pages, all figures + references)
 
-## Table of Contents
+---
 
-* [Project Goal](#project-goal)
-* [Dataset Sources](#dataset-sources)
-* [Methods](#methods)
-* [Exploratory Data Analysis (EDA)](#exploratory-data-analysis-eda)
-* [Machine Learning Models and Results](#machine-learning-models-and-results)
-* [Conclusion & Future Work](#conclusion--future-work)
-* [Authors](#authors)
-* [Acknowledgements](#acknowledgements)
-* [License](#license)
+## TL;DR results
 
-## Project Goal
+| Task / Setup                              | Mutation data | PCA | R²     | RMSE   | MAE    | ROC AUC | Accuracy |
+|-------------------------------------------|---------------|-----|--------|--------|--------|---------|----------|
+| XGBoost regression (expression only)      | No            | No  | —      | —      | —      | —       | —        |
+| XGBoost regression (+ mutation)           | Yes           | No  | —      | —      | —      | —       | —        |
+| XGBoost regression (PCA-100)              | No            | Yes | 0.7943 | 1.2418 | 0.9345 | —       | —        |
+| **XGBoost regression (PCA-100 + mut.)**   | **Yes**       | Yes | **0.7976** | **1.2316** | **0.9321** | — | — |
+| **XGBoost classifier (expression only)**  | No            | No  | —      | —      | —      | **0.9701** | **96%** |
+| **XGBoost classifier (+ mutation)**       | **Yes**       | No  | —      | —      | —      | **0.9708** | **96%** |
+| Lasso regression baseline                 | No            | No  | 0.6771 | 1.5558 | 1.2373 | —       | —        |
 
-The primary objective was to predict drug sensitivity in LUAD cell lines using machine learning models. We considered two types of models:
+(Cells marked "—" are used only for feature-importance interpretation; quantitative
+metrics are reported only where they meaningfully compare against another configuration.)
 
-1.  **Regression Models:** To predict the natural logarithm of half-maximal inhibitory concentration ($LN\_IC50$) values, which is a standard measure for drug sensitivity.
+---
 
-2.  **Classification Models:** To categorize samples as either "sensitive" or "resistant" based on a threshold of $LN\_IC50$.
+## Project goal
 
-We also sought to determine if incorporating somatic mutation data would improve predictive performance or biological interpretability.
+Predict drug sensitivity in **Lung Adenocarcinoma (LUAD)** cell lines from multi-omic
+features (gene expression + driver-mutation status + drug/pathway metadata) drawn from
+the **Genomics of Drug Sensitivity in Cancer (GDSC)** project, using two
+complementary framings:
 
-## Dataset Sources
+1. **Regression** — predict the natural-log half-maximal inhibitory concentration
+   (LN_IC50) directly. LN_IC50 is the standard pharmacological measure of drug
+   sensitivity; lower means more sensitive.
+2. **Classification** — binarize LN_IC50 at zero (`< 0` → **sensitive**;
+   `≥ 0` → **resistant**) and learn a discriminator.
 
-This project utilized publicly available datasets from the Genomics of Drug Sensitivity in Cancer (GDSC) project. The following datasets were merged for our analysis:
+A secondary objective was to test whether **somatic mutation data adds predictive
+signal over gene expression alone**, and whether the cost in interpretability of
+**dimensionality reduction (PCA)** is justified.
 
-* `GDSC2_fitted_dose_response_27Oct23`: Contains drug sensitivity measures (specifically, LN_IC50 values).
+---
 
-* `Cell_Lines_Details`: Provides metadata for each cell line, used to filter for LUAD-specific samples.
+## Dataset sources (publicly available — GDSC bulk download)
 
-* `Cell_line_RMA_proc_basalExp`: A matrix of gene expression values for thousands of genes.
+| File                                          | Role in the pipeline                                                  |
+|-----------------------------------------------|-----------------------------------------------------------------------|
+| `GDSC2_fitted_dose_response_27Oct23`          | Target variable — LN_IC50 per (cell line, drug)                       |
+| `Cell_Lines_Details`                          | Metadata used to filter for LUAD-tissue samples                       |
+| `Cell_line_RMA_proc_basalExp`                 | RMA-normalized gene-expression matrix (transposed to cell-line × gene)|
+| `mutations_all_20230202`                      | Binary somatic mutation matrix on cancer driver genes                 |
+| `screened_compounds_rel_8.5`                  | Drug-level metadata (name, target, pathway category)                  |
 
-* `mutations_all 20230202`: Catalogs binary mutation statuses for known cancer driver genes.
+Bulk download portal: https://www.cancerrxgene.org/downloads/bulk_download
 
-* `screened_compounds_rel_8.5`: Provides information on all screened compounds, including drug names and target pathways.
+> The raw GDSC files are **not** committed to this repo (licensed, large). The
+> step-by-step ingestion is documented in
+> [`methodology/01_data_ingestion.md`](methodology/01_data_ingestion.md).
 
-## Methods
+---
 
-Our analysis was conducted using Python 3 and followed a multi-step process:
+## Pipeline
 
-1.  **Data Merging:** Datasets were merged using unique identifiers like COSMIC ID and DRUG_ID to create a comprehensive multi-omic resource.
+```
+   GDSC bulk download (5 files)
+        │
+        ▼  Filter Cell_Lines_Details by tissue == LUAD
+        ▼  Transpose Cell_line_RMA_proc_basalExp (COSMIC ID rows)
+   LUAD-restricted multi-omic table
+        │
+        ▼  Merge expression × dose-response × screened_compounds (COSMIC ID + DRUG_ID)
+        ▼  Merge mutations via Sanger model_id → cell line
+   Wide multi-omic dataset (~17,000 numerical features)
+        │
+        ▼  One-hot encode categoricals · StandardScaler · float32 cast
+        ▼  Binarize LN_IC50 (< 0 → sensitive · ≥ 0 → resistant)
+        ▼  PCA(100) optional branch
+        │
+        ▼  XGBoost regression (LN_IC50)  ┐
+        ▼  XGBoost classifier (binary)   ┤  4 configurations each:
+                                          │  × mutation in/out × PCA in/out
+                                          ▼
+   Feature importance, ROC AUC, confusion matrices, R²/RMSE/MAE
+```
 
-2.  **Preprocessing:**
+---
 
-    * Missing values were handled.
+## Repository layout
 
-    * Categorical features were transformed using one-hot encoding.
+```
+capstone-project-2025/
+├── README.md                                this file
+├── LICENSE                                  MIT
+├── .gitignore
+├── requirements.txt                         Python dependencies (pinned)
+├── docs/
+│   └── Capstone_Paper.pdf                   full deliverable paper (28 pages, all figures + references)
+├── methodology/                             step-by-step methodology breakdown
+│   ├── 01_data_ingestion.md
+│   ├── 02_preprocessing.md
+│   ├── 03_exploratory_data_analysis.md
+│   ├── 04_regression_models.md
+│   └── 05_classification_models.md
+└── figures/                                 14 figures extracted from the paper
+    ├── fig01_ln_ic50_histogram.png
+    ├── fig02_ln_ic50_qq_plot.png
+    ├── fig03_driver_gene_mutation_frequencies.png
+    ├── fig04_mutation_lnic50_correlations.png
+    ├── fig05_pathway_enrichment_sensitive_vs_resistant.png
+    ├── fig06_top5_effective_drugs.png
+    ├── fig07_regression_top20_features_no_mut_no_pca.png
+    ├── fig08_regression_top20_features_with_mut_no_pca.png
+    ├── fig09_classifier_roc_no_mutation.png
+    ├── fig10_classifier_confusion_matrix_no_mutation.png
+    ├── fig11_classifier_top20_features_no_mutation.png
+    ├── fig12_classifier_roc_with_mutation.png
+    ├── fig13_classifier_confusion_matrix_with_mutation.png
+    └── fig14_classifier_top20_features_with_mutation.png
+```
 
-    * Continuous features were standardized using `StandardScaler` from the `scikit-learn` library.
+---
 
-3.  **Feature Engineering:**
+## Key findings
 
-    * Principal Component Analysis (PCA) was applied in selected model pipelines to reduce dimensionality and computational cost.
+**Biological signal — feature importance across models**
 
-    * For our classification models, LN_IC50 values were binarized with a threshold of $LN\_IC50<0$ for the "sensitive" class and $LN\_IC50\ge0$ for the "resistant" class.
+- **RNA polymerase as drug target** dominates the classifier — LUAD cell lines
+  respond very differently to drugs targeting the transcriptional machinery,
+  consistent with the literature on transcription as a tumor vulnerability
+  (Ferreira et al., 2020; Saproo et al., 2023).
+- **Romidepsin (HDAC inhibitor)** showed the lowest mean LN_IC50 across the 286
+  screened compounds — a drug-repurposing candidate for LUAD given the
+  pathway-level enrichment of chromatin/histone acetylation in the sensitive
+  subset.
+- **BCL-2 / MCL-1 family** features (apoptosis evasion) surface as top predictors
+  once mutation data is added — clinically aligned with BH3-mimetic strategies in
+  LUAD.
 
-## Exploratory Data Analysis (EDA)
+**Mutation-LN_IC50 point-biserial correlations**
 
-The EDA revealed several key insights into the dataset and the biological context of LUAD:
+- Negative (more sensitive when mutated): **STK11**, **KEAP1**, **GRIN2A**
+  (STK11 strongest at ≈ −0.07).
+- Positive (more resistant when mutated): **ASXL2**, **PALB2**, **PTPN13**,
+  **PRKAR1A**.
 
-* **LN_IC50 Distribution:** The log-transformed IC50 values followed a slightly left-skewed distribution, justifying the use of models like XGBoost that are robust to non-normal data.
+**Methodological takeaways**
 
-* **Driver Gene Mutations:** TP53 was the most frequently mutated driver gene (~81%), consistent with existing literature. Other frequent mutations included KRAS and STK11.
+- Gene expression alone is the dominant predictive signal; somatic mutation status
+  adds marginal performance but meaningful biological interpretability.
+- PCA improves runtime on a 17 k-feature space but **degrades classifier
+  performance** and obscures biological feature importance — kept only for the
+  regression speedup case.
+- Lasso (R² = 0.68) underperforms XGBoost — confirms non-linear interactions
+  dominate the genomic feature space.
 
-* **Mutation-Drug Sensitivity Correlation:** A point-biserial correlation analysis showed negative correlations between mutations in genes like STK11 and KEAP1 and LN_IC50 values, suggesting increased drug sensitivity. Conversely, mutations in genes like ASXL2 showed a positive correlation, potentially indicating drug resistance.
+For the full results, figures, and discussion, see
+[`docs/Capstone_Paper.pdf`](docs/Capstone_Paper.pdf).
 
-* **Pathway Enrichment:** Analysis of the most enriched pathways revealed that **Chromatin histone acetylation** and **Metabolism** were highly active in sensitive cell lines, while **Protein stability and degradation** pathways were more prominent in resistant cell lines.
+---
 
-* **Drug Efficacy:** Of the 286 drugs screened, **Romidepsin** was identified as the most effective compound in LUAD cell lines based on its average LN_IC50 value.
+## Methodology breakdown
 
-## Machine Learning Models and Results
+The `methodology/` directory documents the analytical pipeline step by step. Each
+file is self-contained and references the corresponding section of the paper:
 
-We primarily used XGBoost for both regression and classification tasks, comparing model performance with and without PCA and mutation data.
+| Step                                          | Doc                                                                    | Paper section |
+|-----------------------------------------------|------------------------------------------------------------------------|---------------|
+| 1. Dataset ingestion + LUAD filtering         | [`methodology/01_data_ingestion.md`](methodology/01_data_ingestion.md) | § 2.1–2.2     |
+| 2. Preprocessing + feature engineering        | [`methodology/02_preprocessing.md`](methodology/02_preprocessing.md)   | § 2.3         |
+| 3. Exploratory data analysis                  | [`methodology/03_exploratory_data_analysis.md`](methodology/03_exploratory_data_analysis.md) | § 3 |
+| 4. XGBoost regression — 4 configurations      | [`methodology/04_regression_models.md`](methodology/04_regression_models.md) | § 4.1 |
+| 5. XGBoost classification — 4 configurations  | [`methodology/05_classification_models.md`](methodology/05_classification_models.md) | § 4.2 |
 
-### Regression Models
+---
 
-* The model incorporating both PCA and mutation data achieved the best performance with an $R^{2}$ **of 0.7976**, **RMSE of 1.2316**, and **MAE of 0.9321**.
+## Tools used
 
-* The non-PCA models, while slightly less performant, provided the most biologically interpretable results, highlighting RNA polymerase-related targets and specific drugs (like Sepantronium bromide) as top predictors.
+| Stage                       | Tool                                                                   |
+|-----------------------------|------------------------------------------------------------------------|
+| Language                    | Python 3                                                               |
+| Data handling               | pandas · NumPy                                                         |
+| Preprocessing               | scikit-learn (`StandardScaler`, `OneHotEncoder`, `PCA`)                |
+| Modeling — regression       | XGBoost (`XGBRegressor`)                                               |
+| Modeling — classification   | XGBoost (`XGBClassifier`)                                              |
+| Baseline                    | scikit-learn (`Lasso`)                                                 |
+| Statistics                  | SciPy (`stats.pointbiserialr`, `stats.shapiro`)                        |
+| Visualization               | matplotlib · seaborn                                                   |
 
-### Classification Models
+Install pinned dependencies via:
 
-* Classification models consistently achieved high performance with an **ROC AUC of ~0.97** and **accuracy of ~96%**.
+```bash
+pip install -r requirements.txt
+```
 
-* The model without mutation data identified **RNA polymerase** as the most significant feature.
-
-* Adding mutation data did not substantially improve performance but introduced key biological features, such as the **BCL-2/MCL-1 family** of genes, into the top predictors. This highlights the value of mutation data for biological insight.
-
-### Key Takeaway
-
-Our findings validate the trade-off between model performance and interpretability. While PCA improves computational speed for high-dimensional data, it can obscure crucial biological insights. Gene expression proved to be a stronger predictive signal than mutation status, but mutation data added significant value for biological interpretation.
-
-## Conclusion & Future Work
-
-Our project successfully demonstrates the utility of machine learning in predicting drug sensitivity in LUAD. The models successfully identified biologically and clinically relevant features, such as RNA polymerase targets and BCL-2 family genes, which align with our understanding of cancer biology.
-
-**Future work includes:**
-
-* Expanding the analysis to include more cancer types and datasets (e.g., proteomics or epigenomics).
-
-* Validating the models on external datasets to confirm their reliability.
-
-* Exploring alternative machine learning methods like deep learning or graph neural networks.
-
+---
 
 ## Authors
 
-* Jordan Dautelle
+| Name             | Role                                  |
+|------------------|---------------------------------------|
+| Jordan Dautelle  | Author (corresponding)                |
+| Hang Tran        | Author                                |
+| David Yoon       | Author                                |
+| Alli Warren      | Author                                |
+| Dr. Ken Sweat    | Advisor (Arizona State University)    |
 
-* Hang Tran
-
-* David Yoon
-
-* Alli Warren
+---
 
 ## Acknowledgements
 
-* **Dr. Ken Sweat**, for guidance and support on the project.
+Thanks to the **Genomics of Drug Sensitivity in Cancer** project at the Wellcome
+Sanger Institute and the Cancer Genome Project for making the raw multi-omic data
+publicly available, and to **Dr. Ken Sweat** for capstone supervision.
 
-* **Arizona State University**, for providing resources for this capstone.
+---
 
 ## License
 
-This project is licensed under the MIT License.
+MIT — see [`LICENSE`](LICENSE).
