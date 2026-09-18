@@ -16,5 +16,6 @@ env/
 # raw GDSC data (not committed — see methodology/01_data_ingestion.md)
 data/raw/
 data/processed/
+outputs/
 *.h5
 *.pkl

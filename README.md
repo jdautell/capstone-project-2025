@@ -100,6 +100,15 @@ capstone-project-2025/
 ├── LICENSE                                  MIT
 ├── .gitignore
 ├── requirements.txt                         Python dependencies (pinned)
+├── src/                                     reproducible analysis code
+│   ├── 01_build_dataset.py                  merge the five GDSC sources
+│   ├── 02_exploratory_analysis.py           EDA and biological summaries
+│   ├── 03_classification_no_pca.py          XGBoost classifier, raw features
+│   ├── 04_classification_pca.py             XGBoost classifier, PCA-100
+│   ├── 05_regression_no_pca.py              XGBoost regression, raw features
+│   ├── 06_regression_pca.py                 XGBoost regression, PCA-100
+│   ├── 07_classification_tuning.py           randomized classifier tuning
+│   └── common.py                            shared preprocessing definitions
 ├── docs/
 │   └── Capstone_Paper.pdf                   full deliverable paper (28 pages, all figures + references)
 ├── methodology/                             step-by-step methodology breakdown
@@ -124,6 +133,30 @@ capstone-project-2025/
     ├── fig13_classifier_confusion_matrix_with_mutation.png
     └── fig14_classifier_top20_features_with_mutation.png
 ```
+
+## Reproduce the analysis
+
+The scripts use relative paths and do not contain machine-specific locations. Put
+the five original GDSC downloads in `data/raw/`, then run from the repository root:
+
+```bash
+pip install -r requirements.txt
+python src/01_build_dataset.py
+python src/02_exploratory_analysis.py
+python src/03_classification_no_pca.py
+python src/04_classification_pca.py
+python src/05_regression_no_pca.py
+python src/06_regression_pca.py
+python src/07_classification_tuning.py
+```
+
+Raw and processed datasets are intentionally excluded from version control. Each
+script accepts `--help` and supports custom input/output paths.
+
+The published metrics reproduce the original response-level 80/20 split. This
+tests held-out cell-line/drug response pairs when the same cell lines and drugs may
+also occur in training. Generalization to entirely unseen cell lines or unseen
+drugs requires a grouped split by `COSMIC_ID` or `DRUG_ID`, respectively.
 
 ---
 
