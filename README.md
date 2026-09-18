@@ -2,7 +2,8 @@
 
 > XGBoost regression and classification on multi-omic GDSC data (gene expression +
 > somatic driver mutations) to predict drug sensitivity in **Lung Adenocarcinoma**
-> (LUAD) cell lines — ROC AUC **0.97**, R² **0.80**.
+> (LUAD) cell lines. The original exploratory random-pair split reached ROC AUC
+> **0.97** and R² **0.80**; the V2 adds stricter unseen-cell and unseen-drug tests.
 
 **Capstone — M.S. Biological Data Science · Arizona State University**
 *LSC 585 Capstone II in Biological Data Science · Dr. Ken Sweat · May 2, 2025*
@@ -157,6 +158,20 @@ The published metrics reproduce the original response-level 80/20 split. This
 tests held-out cell-line/drug response pairs when the same cell lines and drugs may
 also occur in training. Generalization to entirely unseen cell lines or unseen
 drugs requires a grouped split by `COSMIC_ID` or `DRUG_ID`, respectively.
+
+### V2: leakage-aware validation
+
+The V2 implements those grouped tests, fits preprocessing on training data only,
+removes response-derived predictors, audits group overlap, and reports uncertainty
+across repeated holdouts:
+
+```bash
+python src/08_v2_grouped_validation.py --repeats 5
+```
+
+See [`docs/V2_VALIDATION.md`](docs/V2_VALIDATION.md) for the rationale and
+interpretation guide. Until the original GDSC files are rerun, grouped metrics are
+intentionally not claimed here.
 
 ---
 
